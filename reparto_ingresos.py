@@ -11,6 +11,8 @@ DB_NAME = "lakehouse"                                              # Nombre espe
 DB_USER = "metrodora_reader_dev"                                   # Nombre de usuario para acceder a la base de datos
 DB_PASSWORD = "ContraseñaSegura123*"                               # Contraseña para ese usuario (¡ojo! esto es un ejemplo, en producción se maneja de forma más segura)
 OUTPUT_CSV_PATH = "./reparto_ingresos_output.csv"                  # Nombre y ruta del archivo CSV que vamos a generar con el resultado
+DEBUG_CSV_PATH = "./reparto_ingresos_debug.csv"                    # Ruta para el fichero de depuración con los datos de entrada y fechas calculadas.
+COURSE_SUMMARY_PATH = "./resumen_por_curso.csv"                    # Ruta para el resumen de ingresos totales por curso.
 
 # Construimos la URL de conexión para SQLAlchemy.
 # Es como una dirección web súper específica para la base de datos.
@@ -82,11 +84,14 @@ def procesar_reparto(df_datos):
         df_datos: DataFrame de Pandas con los datos de matrículas y productos combinados.
         
     Returns:
-        Un DataFrame de Pandas con el reparto de ingresos detallado por día.
+        Una tupla con dos DataFrames: 
+        1. El reparto de ingresos detallado por día.
+        2. Un DataFrame de depuración con los datos de entrada y fechas calculadas.
     """
     print("Procesando el reparto de ingresos...")
     
     lista_reparto = [] # Creamos una lista vacía para ir guardando cada "trozo" del reparto.
+    lista_debug = []   # Lista para guardar los datos de depuración de cada matrícula.
 
     # Iteramos por cada fila del DataFrame. Cada fila es una matrícula con su info de producto.
     # 'iterrows()' nos da el índice de la fila y la fila misma (como un objeto).
@@ -106,85 +111,111 @@ def procesar_reparto(df_datos):
         meses_duracion = row['meses_duracion'] # Esto podría ser un número o NaT si no está.
 
         # --- Lógica principal del reparto ---
+        
+        fecha_inicio_reparto = None # Variable para guardar la fecha de inicio del reparto.
+        fecha_fin_reparto = None   # Variable para guardar la fecha de fin del reparto.
+        origen_fechas = "N/A"      # Para el debug, saber de dónde salieron las fechas.
+
         if modalidad == 'ONLINE':
             # Si la modalidad es ONLINE, el importe completo se asigna a la fecha de la matrícula.
-            # Creamos un diccionario (como un pequeño objeto JSON) con los datos del reparto para este caso.
             if pd.notna(fec_matricula):
-                 lista_reparto.append({
-                    'FECHA': fec_matricula.strftime('%Y-%m-%d'), # Formateamos la fecha a 'AAAA-MM-DD'
-                    'COD_MATRICULA': cod_matricula,
-                    'IMPORTE': importe_matricula
-                })
+                fecha_inicio_reparto = fec_matricula
+                fecha_fin_reparto = fec_matricula
+                origen_fechas = "ONLINE: fec_matricula"
             else:
+                origen_fechas = "ONLINE: sin fecha de matrícula"
                 print(f"Advertencia: Matrícula ONLINE {cod_matricula} sin fecha de matrícula válida. No se puede repartir.")
 
         else: # Si la modalidad NO es ONLINE (presencial, semipresencial, etc.)
-            fecha_inicio_reparto = None # Variable para guardar la fecha de inicio del reparto.
-            fecha_fin_reparto = None   # Variable para guardar la fecha de fin del reparto.
-
             # Aplicamos las reglas de prioridad para encontrar las fechas de reparto:
             # Regla 1: Usar fechas de reconocimiento si existen.
             # 'pd.notna()' comprueba si un valor no es nulo o NaT (Not a Time).
             if pd.notna(fecha_inicio_reconocimiento) and pd.notna(fecha_fin_reconocimiento):
                 fecha_inicio_reparto = fecha_inicio_reconocimiento
                 fecha_fin_reparto = fecha_fin_reconocimiento
+                origen_fechas = "Reconocimiento"
             # Regla 2: Si no hay fechas de reconocimiento, usar fechas de inicio/fin del producto.
             elif pd.notna(fecha_inicio_producto) and pd.notna(fecha_fin_producto):
                 fecha_inicio_reparto = fecha_inicio_producto
                 fecha_fin_reparto = fecha_fin_producto
+                origen_fechas = "Producto"
             # Regla 3: Si tampoco hay fechas de producto, usar fecha de matrícula + meses de duración.
             elif pd.notna(fec_matricula) and pd.notna(meses_duracion) and meses_duracion > 0:
                 fecha_inicio_reparto = fec_matricula
                 # timedelta permite sumar días, semanas, etc., a una fecha.
                 # Hacemos una aproximación de 30 días por mes.
                 fecha_fin_reparto = fec_matricula + timedelta(days=int(meses_duracion * 30))
-            
-            # Ahora, comprobamos si hemos conseguido fechas válidas para el reparto.
-            if fecha_inicio_reparto and fecha_fin_reparto and fecha_inicio_reparto <= fecha_fin_reparto:
-                # Calculamos el número de días entre inicio y fin (ambos inclusive).
-                numero_dias = (fecha_fin_reparto - fecha_inicio_reparto).days + 1
-                
-                if numero_dias > 0:
-                    importe_diario = importe_matricula / numero_dias # Calculamos cuánto importe toca por día.
-                    
-                    # Generamos una entrada en la lista de reparto por cada día.
-                    for i in range(numero_dias):
-                        fecha_actual = fecha_inicio_reparto + timedelta(days=i) # Fecha del día actual del reparto.
-                        lista_reparto.append({
-                            'FECHA': fecha_actual.strftime('%Y-%m-%d'),
-                            'COD_MATRICULA': cod_matricula,
-                            'IMPORTE': importe_diario
-                        })
-                else: # Caso raro: fechas iguales pero duración calculada como 0 o negativa.
-                     if pd.notna(fec_matricula):
-                        print(f"Advertencia: Fechas de reparto para {cod_matricula} resultan en 0 días. Usando fec_matricula.")
-                        lista_reparto.append({
-                            'FECHA': fec_matricula.strftime('%Y-%m-%d'),
-                            'COD_MATRICULA': cod_matricula,
-                            'IMPORTE': importe_matricula
-                        })
-                     else:
-                        print(f"Advertencia: {cod_matricula} con 0 días de reparto y sin fec_matricula. No se puede repartir.") 
+                origen_fechas = "Matrícula + Meses"
             else:
-                # Si ninguna regla funcionó o las fechas son inválidas, usamos la fecha de matrícula como último recurso.
-                if pd.notna(fec_matricula):
-                    print(f"Advertencia: No se pudieron determinar fechas válidas para {cod_matricula}. Usando fec_matricula.")
+                # Si ninguna regla anterior funciona, se usará el fallback más adelante.
+                origen_fechas = "Fallback a fec_matricula"
+        
+        # Guardamos la información de depuración para esta matrícula ANTES de hacer el reparto.
+        debug_info = {
+            'cod_matricula': cod_matricula,
+            'importe_matricula': importe_matricula,
+            'modalidad': modalidad,
+            'fec_matricula_original': row['fec_matricula'],
+            'meses_duracion_original': row['meses_duracion'],
+            'fecha_inicio_reconocimiento_original': row['fecha_inicio_reconocimiento'],
+            'fecha_fin_reconocimiento_original': row['fecha_fin_reconocimiento'],
+            'fecha_inicio_producto_original': row['fecha_inicio'],
+            'fecha_fin_producto_original': row['fecha_fin'],
+            'fecha_inicio_reparto_calculada': fecha_inicio_reparto.strftime('%Y-%m-%d') if pd.notna(fecha_inicio_reparto) else None,
+            'fecha_fin_reparto_calculada': fecha_fin_reparto.strftime('%Y-%m-%d') if pd.notna(fecha_fin_reparto) else None,
+            'origen_fechas_calculadas': origen_fechas
+        }
+        lista_debug.append(debug_info)
+
+        # Realizamos el reparto con la lógica corregida.
+        if fecha_inicio_reparto and fecha_fin_reparto and fecha_inicio_reparto <= fecha_fin_reparto:
+            numero_dias = (fecha_fin_reparto - fecha_inicio_reparto).days + 1
+            
+            if numero_dias == 1: # Si el reparto es en un solo día
+                lista_reparto.append({
+                    'FECHA': fecha_inicio_reparto.strftime('%Y-%m-%d'),
+                    'COD_MATRICULA': cod_matricula,
+                    'IMPORTE': importe_matricula
+                })
+            elif numero_dias > 1: # Si el reparto es en múltiples días
+                importe_diario = round(importe_matricula / numero_dias, 2)
+                repartido_hasta_ahora = 0
+                
+                # Repartimos para los primeros N-1 días
+                for i in range(numero_dias - 1):
+                    fecha_actual = fecha_inicio_reparto + timedelta(days=i)
                     lista_reparto.append({
-                        'FECHA': fec_matricula.strftime('%Y-%m-%d'),
+                        'FECHA': fecha_actual.strftime('%Y-%m-%d'),
                         'COD_MATRICULA': cod_matricula,
-                        'IMPORTE': importe_matricula
+                        'IMPORTE': importe_diario
                     })
-                else:
-                    print(f"Advertencia: {cod_matricula} sin fechas de reparto válidas NI fec_matricula. No se puede repartir.")
+                    repartido_hasta_ahora += importe_diario
+                
+                # El importe del último día es el total menos lo ya repartido
+                importe_ultimo_dia = round(importe_matricula - repartido_hasta_ahora, 2)
+                fecha_ultimo_dia = fecha_inicio_reparto + timedelta(days=numero_dias - 1)
+                lista_reparto.append({
+                    'FECHA': fecha_ultimo_dia.strftime('%Y-%m-%d'),
+                    'COD_MATRICULA': cod_matricula,
+                    'IMPORTE': importe_ultimo_dia
+                })
+        else: # Fallback: Si no se encontraron fechas válidas o son inconsistentes.
+            if pd.notna(fec_matricula):
+                # Si ninguna regla funcionó o las fechas son inválidas, usamos la fecha de matrícula como último recurso.
+                print(f"Advertencia: No se pudieron determinar fechas válidas para {cod_matricula}. Usando fec_matricula.")
+                lista_reparto.append({
+                    'FECHA': fec_matricula.strftime('%Y-%m-%d'),
+                    'COD_MATRICULA': cod_matricula,
+                    'IMPORTE': importe_matricula
+                })
+            else: # El caso más extremo: no hay fechas ni fecha de matrícula.
+                print(f"Advertencia: {cod_matricula} sin fechas de reparto válidas NI fec_matricula. No se puede repartir.")
 
-    # Cuando hemos recorrido todas las matrículas, convertimos la lista de diccionarios en un DataFrame.
+    # Cuando hemos recorrido todas las matrículas, convertimos las listas en DataFrames.
     df_reparto_final = pd.DataFrame(lista_reparto)
+    df_debug_final = pd.DataFrame(lista_debug)
     
-    # Si hemos generado algún dato de reparto, redondeamos la columna IMPORTE a 2 decimales.
-    if not df_reparto_final.empty:
-        df_reparto_final['IMPORTE'] = df_reparto_final['IMPORTE'].round(2)
-
-    return df_reparto_final # Devolvemos la tabla con el reparto final.
+    return df_reparto_final, df_debug_final # Devolvemos AMBAS tablas.
 
 def guardar_csv(df_resultado, path):
     """Guarda el DataFrame resultado en un archivo CSV.
@@ -209,16 +240,44 @@ def main():
     engine = conectar_db() # Paso 1: Intentar conectar a la base de datos.
     
     if engine: # Si la conexión fue exitosa...
-        print("--- Conexión establecida, obteniendo datos... ---")
+        print("\n--- Conexión establecida, obteniendo datos... ---")
         df_datos_combinados = obtener_datos(engine) # Paso 2: Obtener y combinar los datos.
         
-        if not df_datos_combinados.empty: # Si se obtuvieron datos...
-            print("--- Datos obtenidos, procesando reparto... ---")
-            df_reparto_calculado = procesar_reparto(df_datos_combinados) # Paso 3: Calcular el reparto.
+        # Nos aseguramos de que el importe sea numérico para la suma de verificación
+        if not df_datos_combinados.empty:
+            df_datos_combinados['importe_matricula'] = pd.to_numeric(df_datos_combinados['importe_matricula'], errors='coerce').fillna(0)
+            total_original = df_datos_combinados['importe_matricula'].sum()
+            print(f"Suma total del importe original (verificación): {total_original:,.2f} €")
+
+            print("\n--- Datos obtenidos, procesando reparto... ---")
+            df_reparto_calculado, df_debug = procesar_reparto(df_datos_combinados) # Paso 3: Calcular el reparto, ahora devuelve dos DFs.
             
             if not df_reparto_calculado.empty: # Si el cálculo del reparto generó resultados...
-                print("--- Reparto procesado, guardando CSV... ---")
-                guardar_csv(df_reparto_calculado, OUTPUT_CSV_PATH) # Paso 4: Guardar el resultado.
+                print("\n--- Reparto procesado, guardando archivos... ---")
+                guardar_csv(df_reparto_calculado, OUTPUT_CSV_PATH) # Paso 4a: Guardar el resultado.
+                guardar_csv(df_debug, DEBUG_CSV_PATH)              # Paso 4b: Guardar el fichero de depuración.
+
+                # --- Generar y guardar resumen por curso ---
+                print("--- Generando resumen por curso... ---")
+                # Agrupamos por curso (id_dim_producto) para sumar el importe y listar todas sus matrículas.
+                df_resumen_curso = df_datos_combinados.groupby('id_dim_producto').agg(
+                    IMPORTE_TOTAL_CURSO=('importe_matricula', 'sum'),
+                    COD_MATRICULAS=('cod_matricula', lambda x: ', '.join(sorted(x)))
+                ).reset_index()
+                guardar_csv(df_resumen_curso, COURSE_SUMMARY_PATH)
+
+                # Calculamos y mostramos la suma total del dinero repartido.
+                total_repartido = df_reparto_calculado['IMPORTE'].sum()
+                print(f"\n--- Verificación Final ---")
+                print(f"Suma total del dinero repartido en el CSV: {total_repartido:,.2f} €")
+                
+                # Comprobamos si el total repartido coincide con el original
+                if abs(total_original - total_repartido) < 0.01: # Usamos una pequeña tolerancia para errores de redondeo
+                    print("VERIFICACIÓN OK: El total original coincide con el total repartido.")
+                else:
+                    diferencia = total_repartido - total_original
+                    print(f"ATENCIÓN: Discrepancia de {diferencia:,.2f} € entre el total original y el repartido.")
+
             else:
                 print("El procesamiento del reparto no generó resultados para guardar.")
         else:
@@ -226,7 +285,7 @@ def main():
         
         # Es importante cerrar/liberar los recursos del motor de la base de datos al final.
         engine.dispose()
-        print("--- Conexión a PostgreSQL (SQLAlchemy) cerrada. Script finalizado. ---")
+        print("\n--- Conexión a PostgreSQL (SQLAlchemy) cerrada. Script finalizado. ---")
     else:
         print("No se pudo establecer conexión con la base de datos. Script finalizado con errores.")
 
