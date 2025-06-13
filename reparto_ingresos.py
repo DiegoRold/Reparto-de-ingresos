@@ -99,6 +99,7 @@ def procesar_reparto(df_datos):
         # Extraemos los datos que necesitamos de la fila actual.
         # Es como decir: "de esta fila, dame el valor de la columna 'cod_matricula'".
         cod_matricula = row['cod_matricula']
+        id_dim_producto = row['id_dim_producto']
         importe_matricula = row['importe_matricula']
         # Convertimos las fechas de texto a objetos 'datetime' de Python para poder operar con ellas.
         # 'errors="coerce"' hace que si una fecha no es válida, se convierta en 'NaT' (Not a Time) y no pare el script.
@@ -109,6 +110,14 @@ def procesar_reparto(df_datos):
         fecha_inicio_producto = pd.to_datetime(row['fecha_inicio'], errors='coerce')
         fecha_fin_producto = pd.to_datetime(row['fecha_fin'], errors='coerce')
         meses_duracion = row['meses_duracion'] # Esto podría ser un número o NaT si no está.
+
+        # Bloque de depuración para CLFC549
+        if cod_matricula == "CLFC549":
+            print("DEBUG CLFC549:")
+            print("  fecha_inicio_reconocimiento (original):", row['fecha_inicio_reconocimiento'], "-> (convertido):", fecha_inicio_reconocimiento)
+            print("  fecha_fin_reconocimiento (original):", row['fecha_fin_reconocimiento'], "-> (convertido):", fecha_fin_reconocimiento)
+            print("  pd.notna(fecha_inicio_reconocimiento):", pd.notna(fecha_inicio_reconocimiento))
+            print("  pd.notna(fecha_fin_reconocimiento):", pd.notna(fecha_fin_reconocimiento))
 
         # --- Lógica principal del reparto ---
         
@@ -175,6 +184,7 @@ def procesar_reparto(df_datos):
                 lista_reparto.append({
                     'FECHA': fecha_inicio_reparto.strftime('%Y-%m-%d'),
                     'COD_MATRICULA': cod_matricula,
+                    'ID_DIM_PRODUCTO': id_dim_producto,
                     'IMPORTE': importe_matricula
                 })
             elif numero_dias > 1: # Si el reparto es en múltiples días
@@ -187,6 +197,7 @@ def procesar_reparto(df_datos):
                     lista_reparto.append({
                         'FECHA': fecha_actual.strftime('%Y-%m-%d'),
                         'COD_MATRICULA': cod_matricula,
+                        'ID_DIM_PRODUCTO': id_dim_producto,
                         'IMPORTE': importe_diario
                     })
                     repartido_hasta_ahora += importe_diario
@@ -197,6 +208,7 @@ def procesar_reparto(df_datos):
                 lista_reparto.append({
                     'FECHA': fecha_ultimo_dia.strftime('%Y-%m-%d'),
                     'COD_MATRICULA': cod_matricula,
+                    'ID_DIM_PRODUCTO': id_dim_producto,
                     'IMPORTE': importe_ultimo_dia
                 })
         else: # Fallback: Si no se encontraron fechas válidas o son inconsistentes.
@@ -206,6 +218,7 @@ def procesar_reparto(df_datos):
                 lista_reparto.append({
                     'FECHA': fec_matricula.strftime('%Y-%m-%d'),
                     'COD_MATRICULA': cod_matricula,
+                    'ID_DIM_PRODUCTO': id_dim_producto,
                     'IMPORTE': importe_matricula
                 })
             else: # El caso más extremo: no hay fechas ni fecha de matrícula.
@@ -257,14 +270,12 @@ def main():
                 guardar_csv(df_reparto_calculado, OUTPUT_CSV_PATH) # Paso 4a: Guardar el resultado.
                 guardar_csv(df_debug, DEBUG_CSV_PATH)              # Paso 4b: Guardar el fichero de depuración.
 
-                # --- Generar y guardar resumen por curso ---
-                print("--- Generando resumen por curso... ---")
-                # Agrupamos por curso (id_dim_producto) para sumar el importe y listar todas sus matrículas.
-                df_resumen_curso = df_datos_combinados.groupby('id_dim_producto').agg(
-                    IMPORTE_TOTAL_CURSO=('importe_matricula', 'sum'),
-                    COD_MATRICULAS=('cod_matricula', lambda x: ', '.join(sorted(x)))
+                # --- Generar y guardar resumen por matrícula y curso ---
+                print("--- Generando resumen por matrícula y curso... ---")
+                df_resumen_matricula_curso = df_reparto_calculado.groupby(['ID_DIM_PRODUCTO', 'COD_MATRICULA']).agg(
+                    IMPORTE_REPARTIDO=('IMPORTE', 'sum')
                 ).reset_index()
-                guardar_csv(df_resumen_curso, COURSE_SUMMARY_PATH)
+                guardar_csv(df_resumen_matricula_curso, './resumen_por_matricula_y_curso.csv')
 
                 # Calculamos y mostramos la suma total del dinero repartido.
                 total_repartido = df_reparto_calculado['IMPORTE'].sum()
