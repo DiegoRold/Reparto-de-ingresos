@@ -111,14 +111,6 @@ def procesar_reparto(df_datos):
         fecha_fin_producto = pd.to_datetime(row['fecha_fin'], errors='coerce')
         meses_duracion = row['meses_duracion'] # Esto podría ser un número o NaT si no está.
 
-        # Bloque de depuración para CLFC549
-        if cod_matricula == "CLFC549":
-            print("DEBUG CLFC549:")
-            print("  fecha_inicio_reconocimiento (original):", row['fecha_inicio_reconocimiento'], "-> (convertido):", fecha_inicio_reconocimiento)
-            print("  fecha_fin_reconocimiento (original):", row['fecha_fin_reconocimiento'], "-> (convertido):", fecha_fin_reconocimiento)
-            print("  pd.notna(fecha_inicio_reconocimiento):", pd.notna(fecha_inicio_reconocimiento))
-            print("  pd.notna(fecha_fin_reconocimiento):", pd.notna(fecha_fin_reconocimiento))
-
         # --- Lógica principal del reparto ---
         
         fecha_inicio_reparto = None # Variable para guardar la fecha de inicio del reparto.
