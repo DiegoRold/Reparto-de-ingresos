@@ -1,0 +1,11 @@
+# Archivos de entorno
+.env
+
+# Archivos de salida
+*.csv
+
+# Directorios de Python
+__pycache__/
+.pytest_cache/
+venv/
+.venv/ 

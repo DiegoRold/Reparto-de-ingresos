@@ -1,14 +1,25 @@
 import pandas as pd
 from sqlalchemy import create_engine # Para crear el "motor" de conexión a la BD.
 from datetime import datetime, timedelta # Para trabajar con fechas y calcular diferencias.
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde el archivo .env
+load_dotenv()
 
 # --- Configuración Principal del Script ---
-DB_HOST = "psql-metrodoralakehouse-dev.postgres.database.azure.com"  
-DB_NAME = "lakehouse"                                              
-DB_USER = "metrodora_reader_dev"                                   
-DB_PASSWORD = "ContraseñaSegura123*"                              
-OUTPUT_CSV_PATH = "./reparto_ingresos_output.csv"                  
-DEBUG_CSV_PATH = "./reparto_ingresos_debug.csv"                    
+DB_HOST = os.getenv("DB_HOST")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+OUTPUT_CSV_PATH = os.getenv("OUTPUT_CSV_PATH", "./reparto_ingresos_output.csv")
+DEBUG_CSV_PATH = os.getenv("DEBUG_CSV_PATH", "./reparto_ingresos_debug.csv")
+
+# --- Validaciones de variables de entorno ---
+if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+    missing_vars = [var for var in ["DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"] if not os.getenv(var)]
+    raise ValueError(f"Faltan las siguientes variables de entorno necesarias: {', '.join(missing_vars)}. "
+                     "Asegúrate de que existe un archivo .env con todas las credenciales.")
 
 # Construimos la URL de conexión para SQLAlchemy.
 DB_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
